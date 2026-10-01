@@ -1,76 +1,104 @@
-# ResourceQuotaClaim Rightsizer v3
+# ResourceQuotaClaim Rightsizer
 
-Règle : `used + 5%` est appliqué uniquement si cette valeur est strictement
-inférieure au plafond actuel (`spec.hard`) du ResourceQuota. Le script ne fait donc
-jamais d'augmentation automatique.
+Le ResourceQuota est la seule source de vérité. Le script lit `status.used`
+(consommation des quotas) et `spec.hard` (plafonds actuels), sans lire de
+ResourceQuotaClaim. Il calcule `used + MARGIN_PERCENT` et réduit uniquement les
+valeurs strictement inférieures aux plafonds. CPU et mémoire sont indépendants ;
+une dimension non réductible conserve son plafond actuel.
 
-CPU et mémoire sont évalués indépendamment.
+Les clés sélectionnées dans `spec.hard` sont `requests.cpu` et `requests.memory`
+en priorité, sinon `cpu` et `memory`. Les mêmes clés sont lues dans `status.used`.
+Une valeur absente ou invalide n'est jamais assimilée à zéro.
 
-Les valeurs utilisées proviennent du `status.used` du ResourceQuota :
-Les clés sont sélectionnées dans `spec.hard` : `requests.cpu` et
-`requests.memory` en priorité, sinon `cpu` et `memory`. Les mêmes clés
-sont lues dans `status.used` pour comparer des valeurs cohérentes.
-Une valeur absente bloque l'évaluation ; elle n'est pas assimilée à zéro.
+## Simulation et fichiers générés
 
-Formats CPU supportés : `10`, `1`, `0.5`, `1000m`, `500m`.
-Le CPU est normalisé en millicores avant comparaison.
+```bash
+DRY_RUN=true ./resourcequota-rightsizer.sh namespaces.txt
+```
 
-Formats mémoire supportés : `Ki`, `Mi`, `Gi`, `Ti`, ainsi que `0` sans unité.
-La mémoire est normalisée en Mi avant comparaison (`1Gi = 1024Mi`).
+À la fin de l'évaluation, en simulation comme en application, le script génère
+ces trois fichiers dans le répertoire courant et affiche leurs chemins absolus :
 
-Le script :
-1. lit la liste des namespaces ;
-2. sauvegarde chaque `kubectl get resourcequota -o json` dans un fichier temporaire ;
-3. valide le JSON avec `jq empty` ;
-4. ignore un namespace dont `.items` est vide ;
-5. lit les plafonds `spec.hard` du ResourceQuota, sans lire de ResourceQuotaClaim ;
-6. ne mélange pas stderr de kubectl avec le JSON envoyé à jq ;
-7. calcule et valide toutes les cibles ;
-8. bloque toute application si une vraie erreur d'évaluation existe ;
-9. génère tous les ResourceQuotaClaim réductibles, puis les applique à la fin.
+- `rightsizer-changes.tsv` : changements applicables des namespaces évalués,
+  avec consommation, plafonds actuels et cibles CPU/mémoire ;
+- `rightsizer-claims.json` : liste JSON des ResourceQuotaClaim générés ;
+- `rightsizer-errors.log` : erreurs par namespace, notamment les refus d'accès.
+  Vide si toute l'évaluation a réussi.
 
-Le nom des claims générés est `managed-quota` par défaut. Une dimension non
-réductible conserve le plafond du ResourceQuota.
+Les namespaces sans ResourceQuota sont ignorés. Les namespaces inaccessibles,
+les quotas multiples et les données invalides sont signalés dans le journal,
+puis l'évaluation continue sur les autres namespaces. Les doublons sont ignorés.
 
-Les anciens contrôles incorrects `jq ... | grep true` ont été supprimés.
+**Une évaluation partielle produit quand même les trois fichiers**, mais termine
+avec le code `2` et n'applique aucun claim. Les manifests partiels contiennent
+uniquement les changements des namespaces évalués : ils ne constituent pas un
+plan complet. Sans changement applicable, le TSV contient seulement l'en-tête
+et le JSON une liste vide. Les fichiers existants sont remplacés à chaque export,
+et le journal est vidé lors d'une évaluation sans erreur.
 
-Le script évite les redirections de fichiers `>`, `>>`, `<` et `<<<`.
-Il utilise des pipes et `tee`.
+Une erreur de configuration, une dépendance manquante ou un échec d'écriture
+peut empêcher l'export ; le script affiche alors une erreur explicite.
 
-Simulation recommandée :
+Chemins personnalisés (les répertoires parents sont créés si nécessaire) :
 
-    DRY_RUN=true ./resourcequota-rightsizer.sh namespaces.txt
+```bash
+DRY_RUN=true \
+DRY_RUN_FILE=./rapports/changements.tsv \
+MANIFEST_FILE=./rapports/claims.json \
+ERROR_REPORT_FILE=./rapports/erreurs.log \
+./resourcequota-rightsizer.sh namespaces.txt
+```
 
-Chaque exécution réussie produit `rightsizer-changes.tsv` dans le répertoire
-courant (celui depuis lequel la commande est lancée), en simulation comme en
-application. Le script affiche les chemins absolus des deux fichiers générés.
-Ce fichier TSV contient uniquement les claims réductibles : namespace, nom du
-claim, consommation, plafonds actuels du ResourceQuota, valeurs cibles et indicateurs de réduction
-CPU/mémoire. Il peut être ouvert dans un tableur. Sans changement applicable, il
-contient seulement l'en-tête. Une erreur d'évaluation empêche sa génération.
-Un rapport existant au même chemin est remplacé après une évaluation réussie.
+## Application
 
-Choisir le chemin du rapport :
+```bash
+./resourcequota-rightsizer.sh namespaces.txt
+```
 
-    DRY_RUN=true DRY_RUN_FILE=/tmp/changements.tsv ./resourcequota-rightsizer.sh namespaces.txt
+Après l'évaluation et la génération du plan, si aucune erreur n'existe et qu'au
+moins un changement est applicable, le script exécute `kubectl apply -f` sur le
+plan temporaire généré. Le nom des claims est `managed-quota` par défaut.
+L'application crée ou met à jour les claims ; leur contrôleur réconcilie les
+ResourceQuota. L'application de plusieurs claims n'est pas atomique.
 
-Application :
+Un plan complet issu du dry run peut également être appliqué manuellement :
 
-    ./resourcequota-rightsizer.sh namespaces.txt
+```bash
+kubectl apply -f rightsizer-claims.json
+```
 
-Changer la marge :
+## Configuration et prérequis
 
-    MARGIN_PERCENT=10 ./resourcequota-rightsizer.sh namespaces.txt
+Bash (y compris Bash 3.2 de macOS), `kubectl`, `jq`, `awk`, `sed` et `tee`.
+Le contexte kubectl courant est utilisé. Aucun accès au cluster n'est effectué
+par les tests locaux.
 
-Changer le claim :
+| Variable | Défaut | Description |
+| --- | --- | --- |
+| `DRY_RUN` | `false` | `true` pour simuler ; seules ces deux valeurs sont acceptées |
+| `MARGIN_PERCENT` | `5` | Marge positive ou nulle, décimale acceptée |
+| `CLAIM_NAME` | `managed-quota` | Nom des claims générés |
+| `REQUEST_TIMEOUT` | `30s` | Délai maximal par lecture kubectl |
+| `DRY_RUN_FILE` | `rightsizer-changes.tsv` | Rapport des changements |
+| `MANIFEST_FILE` | `rightsizer-claims.json` | Manifests générés |
+| `ERROR_REPORT_FILE` | `rightsizer-errors.log` | Journal des erreurs |
 
-    CLAIM_NAME=mon-claim ./resourcequota-rightsizer.sh namespaces.txt
+CPU : nombres de cores (`1`, `0.5`) ou millicores (`500m`).
+Mémoire : octets sans suffixe (dont `0`), `Ki`, `Mi`, `Gi`, `Ti`, décimales
+acceptées. La comparaison utilise les octets ; la cible est arrondie au Mi
+supérieur après ajout de la marge. La cible CPU est arrondie au millicore
+supérieur. Les cibles minimales sont `1m` et `1Mi`, mais ne sont retenues que si
+elles réduisent le plafond existant, y compris lorsque celui-ci vaut zéro.
+Les autres formats sont signalés comme non supportés.
 
-Le script génère aussi `rightsizer-claims.json`, une liste de manifests
-ResourceQuotaClaim applicable avec `kubectl apply -f rightsizer-claims.json`.
-Le chemin se configure avec `MANIFEST_FILE`. Sans changement, la liste est vide.
-Les deux fichiers ne sont générés qu’après une évaluation réussie.
+Codes retour : `0` = évaluation complète et succès ; `2` = évaluation partielle,
+fichiers générés et application bloquée ; autre code non nul = échec de
+configuration, d'export ou d'application.
 
-Vérification locale sans accès à un cluster (kubectl simulé) :
+## Vérification
 
-    python3 -B -m unittest discover -s tests -v
+```bash
+bash -n resourcequota-rightsizer.sh
+shellcheck resourcequota-rightsizer.sh
+python3 -B -m unittest discover -s tests -v
+```
