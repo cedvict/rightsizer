@@ -165,6 +165,7 @@ done
 if test -s "${ERRORS_FILE}"; then
     printf '\n%s\n' '================ ECHEC EVALUATION ====================='
     printf '%s\n' 'Aucun claim ne sera modifié.'
+    printf '%s\n' 'Aucun nouveau rapport ni manifest généré : évaluation incomplète.'
     cat "${ERRORS_FILE}"
     exit 1
 fi
@@ -179,18 +180,18 @@ jq -Rn '
 ' "${RESULTS_FILE}" | tee "${WORK_DIR}/claims.json" | sed -n '0p'
 
 printf '\n%s\n' '================ RECAPITULATIF ========================'
-if test "${DRY_RUN}" = "true"; then
-    awk -F '\t' 'BEGIN {
-        OFS = "\t"
-        print "NAMESPACE", "CLAIM", "USED_CPU", "CURRENT_CPU", "TARGET_CPU", "USED_MEMORY", "CURRENT_MEMORY", "TARGET_MEMORY", "REDUCE_CPU", "REDUCE_MEMORY"
-    }
-    $11 == "APPLY" {
-        print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-    }' "${RESULTS_FILE}" | tee "${DRY_RUN_FILE}" | sed -n '0p'
-    cat "${WORK_DIR}/claims.json" | tee "${MANIFEST_FILE}" | sed -n '0p'
-    printf 'Manifests générés : %s\n' "${MANIFEST_FILE}"
-    printf 'Rapport des changements applicables : %s\n' "${DRY_RUN_FILE}"
-fi
+awk -F '\t' 'BEGIN {
+    OFS = "\t"
+    print "NAMESPACE", "CLAIM", "USED_CPU", "CURRENT_CPU", "TARGET_CPU", "USED_MEMORY", "CURRENT_MEMORY", "TARGET_MEMORY", "REDUCE_CPU", "REDUCE_MEMORY"
+}
+$11 == "APPLY" {
+    print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+}' "${RESULTS_FILE}" | tee "${DRY_RUN_FILE}" | sed -n '0p'
+cat "${WORK_DIR}/claims.json" | tee "${MANIFEST_FILE}" | sed -n '0p'
+manifest_path="$(cd "$(dirname "${MANIFEST_FILE}")" && pwd)/$(basename "${MANIFEST_FILE}")"
+report_path="$(cd "$(dirname "${DRY_RUN_FILE}")" && pwd)/$(basename "${DRY_RUN_FILE}")"
+printf 'Manifests générés : %s\n' "${manifest_path}"
+printf 'Rapport des changements applicables : %s\n' "${report_path}"
 
 if ! test -s "${RESULTS_FILE}"; then
     printf '%s\n' 'Aucun ResourceQuota éligible.'

@@ -1,7 +1,7 @@
 # ResourceQuotaClaim Rightsizer v3
 
 Règle : `used + 5%` est appliqué uniquement si cette valeur est strictement
-inférieure à la plafond actuel (`spec.hard`) du ResourceQuota. Le script ne fait donc
+inférieure au plafond actuel (`spec.hard`) du ResourceQuota. Le script ne fait donc
 jamais d'augmentation automatique.
 
 CPU et mémoire sont évalués indépendamment.
@@ -41,7 +41,9 @@ Simulation recommandée :
 
     DRY_RUN=true ./resourcequota-rightsizer.sh namespaces.txt
 
-Le dry run produit `rightsizer-changes.tsv` dans le répertoire courant.
+Chaque exécution réussie produit `rightsizer-changes.tsv` dans le répertoire
+courant (celui depuis lequel la commande est lancée), en simulation comme en
+application. Le script affiche les chemins absolus des deux fichiers générés.
 Ce fichier TSV contient uniquement les claims réductibles : namespace, nom du
 claim, consommation, plafonds actuels du ResourceQuota, valeurs cibles et indicateurs de réduction
 CPU/mémoire. Il peut être ouvert dans un tableur. Sans changement applicable, il
@@ -64,7 +66,11 @@ Changer le claim :
 
     CLAIM_NAME=mon-claim ./resourcequota-rightsizer.sh namespaces.txt
 
-Le dry run génère aussi `rightsizer-claims.json`, une liste de manifests
+Le script génère aussi `rightsizer-claims.json`, une liste de manifests
 ResourceQuotaClaim applicable avec `kubectl apply -f rightsizer-claims.json`.
 Le chemin se configure avec `MANIFEST_FILE`. Sans changement, la liste est vide.
 Les deux fichiers ne sont générés qu’après une évaluation réussie.
+
+Vérification locale sans accès à un cluster (kubectl simulé) :
+
+    python3 -B -m unittest discover -s tests -v
