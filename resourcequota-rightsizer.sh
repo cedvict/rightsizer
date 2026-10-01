@@ -17,7 +17,7 @@ touch "${RESULTS_FILE}" "${ERRORS_FILE}"
 append_line() {
     local target="$1"
     shift
-    printf '%s\n' "$*" | tee -a "${target}" | sed -n '0p'
+    printf '%s\n' "$*" | tee -a "${target}" | sed -n ''
 }
 
 cpu_to_m() {
@@ -68,7 +68,7 @@ while IFS= read -r namespace; do
     quota_file="${WORK_DIR}/${namespace}-resourcequota.json"
 
     if ! kubectl get resourcequota -n "${namespace}" -o json |
-        tee "${quota_file}" | sed -n '0p'
+        tee "${quota_file}" | sed -n ''
     then
         append_line "${ERRORS_FILE}" "${namespace}: get ResourceQuota impossible"
         continue
@@ -159,7 +159,7 @@ while IFS= read -r namespace; do
         "${namespace}" "${CLAIM_NAME}" "${used_cpu}" "${current_cpu}" "${target_cpu}" \
         "${used_memory}" "${current_memory}" "${target_memory}" \
         "${reduce_cpu}" "${reduce_memory}" "${action}" |
-        tee -a "${RESULTS_FILE}" | sed -n '0p'
+        tee -a "${RESULTS_FILE}" | sed -n ''
 done
 
 if test -s "${ERRORS_FILE}"; then
@@ -177,7 +177,7 @@ jq -Rn '
        metadata:{name:.[1], namespace:.[0]},
        spec:{cpu:.[4], memory:.[7]}}] |
     {apiVersion:"v1", kind:"List", items:.}
-' "${RESULTS_FILE}" | tee "${WORK_DIR}/claims.json" | sed -n '0p'
+' "${RESULTS_FILE}" | tee "${WORK_DIR}/claims.json" | sed -n ''
 
 printf '\n%s\n' '================ RECAPITULATIF ========================'
 awk -F '\t' 'BEGIN {
@@ -186,8 +186,8 @@ awk -F '\t' 'BEGIN {
 }
 $11 == "APPLY" {
     print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
-}' "${RESULTS_FILE}" | tee "${DRY_RUN_FILE}" | sed -n '0p'
-cat "${WORK_DIR}/claims.json" | tee "${MANIFEST_FILE}" | sed -n '0p'
+}' "${RESULTS_FILE}" | tee "${DRY_RUN_FILE}" | sed -n ''
+cat "${WORK_DIR}/claims.json" | tee "${MANIFEST_FILE}" | sed -n ''
 manifest_path="$(cd "$(dirname "${MANIFEST_FILE}")" && pwd)/$(basename "${MANIFEST_FILE}")"
 report_path="$(cd "$(dirname "${DRY_RUN_FILE}")" && pwd)/$(basename "${DRY_RUN_FILE}")"
 printf 'Manifests générés : %s\n' "${manifest_path}"
