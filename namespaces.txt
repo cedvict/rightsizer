@@ -1,0 +1,4 @@
+# Un namespace par ligne
+namespace-a
+namespace-b
+namespace-c
