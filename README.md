@@ -1,13 +1,15 @@
 # ResourceQuotaClaim Rightsizer v3
 
 Règle : `used + 5%` est appliqué uniquement si cette valeur est strictement
-inférieure à la valeur actuelle du ResourceQuotaClaim. Le script ne fait donc
+inférieure à la plafond actuel (`spec.hard`) du ResourceQuota. Le script ne fait donc
 jamais d'augmentation automatique.
 
 CPU et mémoire sont évalués indépendamment.
 
 Les valeurs utilisées proviennent du `status.used` du ResourceQuota :
-`requests.cpu` et `requests.memory`, ou à défaut `cpu` et `memory`.
+Les clés sont sélectionnées dans `spec.hard` : `requests.cpu` et
+`requests.memory` en priorité, sinon `cpu` et `memory`. Les mêmes clés
+sont lues dans `status.used` pour comparer des valeurs cohérentes.
 Une valeur absente bloque l'évaluation ; elle n'est pas assimilée à zéro.
 
 Formats CPU supportés : `10`, `1`, `0.5`, `1000m`, `500m`.
@@ -21,11 +23,14 @@ Le script :
 2. sauvegarde chaque `kubectl get resourcequota -o json` dans un fichier temporaire ;
 3. valide le JSON avec `jq empty` ;
 4. ignore un namespace dont `.items` est vide ;
-5. lit le claim `managed-quota` par défaut ;
+5. lit les plafonds `spec.hard` du ResourceQuota, sans lire de ResourceQuotaClaim ;
 6. ne mélange pas stderr de kubectl avec le JSON envoyé à jq ;
 7. calcule et valide toutes les cibles ;
 8. bloque toute application si une vraie erreur d'évaluation existe ;
-9. applique seulement les claims réellement réductibles.
+9. génère tous les ResourceQuotaClaim réductibles, puis les applique à la fin.
+
+Le nom des claims générés est `managed-quota` par défaut. Une dimension non
+réductible conserve le plafond du ResourceQuota.
 
 Les anciens contrôles incorrects `jq ... | grep true` ont été supprimés.
 
@@ -38,7 +43,7 @@ Simulation recommandée :
 
 Le dry run produit `rightsizer-changes.tsv` dans le répertoire courant.
 Ce fichier TSV contient uniquement les claims réductibles : namespace, nom du
-claim, consommation, valeurs actuelles, valeurs cibles et indicateurs de réduction
+claim, consommation, plafonds actuels du ResourceQuota, valeurs cibles et indicateurs de réduction
 CPU/mémoire. Il peut être ouvert dans un tableur. Sans changement applicable, il
 contient seulement l'en-tête. Une erreur d'évaluation empêche sa génération.
 Un rapport existant au même chemin est remplacé après une évaluation réussie.
@@ -58,3 +63,8 @@ Changer la marge :
 Changer le claim :
 
     CLAIM_NAME=mon-claim ./resourcequota-rightsizer.sh namespaces.txt
+
+Le dry run génère aussi `rightsizer-claims.json`, une liste de manifests
+ResourceQuotaClaim applicable avec `kubectl apply -f rightsizer-claims.json`.
+Le chemin se configure avec `MANIFEST_FILE`. Sans changement, la liste est vide.
+Les deux fichiers ne sont générés qu’après une évaluation réussie.

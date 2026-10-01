@@ -6,6 +6,7 @@ MARGIN_PERCENT="${MARGIN_PERCENT:-5}"
 CLAIM_NAME="${CLAIM_NAME:-managed-quota}"
 DRY_RUN="${DRY_RUN:-false}"
 DRY_RUN_FILE="${DRY_RUN_FILE:-rightsizer-changes.tsv}"
+MANIFEST_FILE="${MANIFEST_FILE:-rightsizer-claims.json}"
 
 WORK_DIR="$(mktemp -d)"
 RESULTS_FILE="${WORK_DIR}/evaluated.tsv"
@@ -56,7 +57,7 @@ if ! test -f "${NAMESPACE_FILE}"; then
     exit 1
 fi
 
-printf 'Règle: used + %s%%, appliqué seulement si inférieur au claim actuel.\n' "${MARGIN_PERCENT}"
+printf 'Règle: used + %s%%, appliqué seulement si inférieur au plafond ResourceQuota actuel.\n' "${MARGIN_PERCENT}"
 printf '%s\n' '================ PHASE 1 : EVALUATION ================'
 
 sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
@@ -65,7 +66,6 @@ while IFS= read -r namespace; do
     printf '\n[%s]\n' "${namespace}"
 
     quota_file="${WORK_DIR}/${namespace}-resourcequota.json"
-    claim_file="${WORK_DIR}/${namespace}-resourcequotaclaim.json"
 
     if ! kubectl get resourcequota -n "${namespace}" -o json |
         tee "${quota_file}" | sed -n '0p'
@@ -92,38 +92,14 @@ while IFS= read -r namespace; do
     fi
 
     quota_name="$(jq -r '.items[0].metadata.name // empty' "${quota_file}")"
-    used_cpu="$(jq -r '.items[0].status.used | .["requests.cpu"] // .cpu // empty' "${quota_file}")"
-    used_memory="$(jq -r '.items[0].status.used | .["requests.memory"] // .memory // empty' "${quota_file}")"
-
-    if test -z "${used_cpu}" || test -z "${used_memory}"; then
-        used_keys="$(jq -r '(.items[0].status.used // {}) | keys | join(", ")' "${quota_file}")"
-        append_line "${ERRORS_FILE}" "${namespace}: status.used CPU/memory incomplet (attendu: requests.cpu ou cpu, requests.memory ou memory; clés présentes: ${used_keys})"
-        continue
-    fi
-
-    if ! kubectl get resourcequotaclaim "${CLAIM_NAME}" -n "${namespace}" -o json |
-        tee "${claim_file}" | sed -n '0p'
-    then
-        append_line "${ERRORS_FILE}" "${namespace}: claim ${CLAIM_NAME} absent ou inaccessible"
-        continue
-    fi
-
-    if ! jq empty "${claim_file}"; then
-        append_line "${ERRORS_FILE}" "${namespace}: JSON ResourceQuotaClaim invalide"
-        continue
-    fi
-
-    actual_claim_name="$(jq -r '.metadata.name // empty' "${claim_file}")"
-    claim_cpu="$(jq -r '.spec.cpu // empty' "${claim_file}")"
-    claim_memory="$(jq -r '.spec.memory // empty' "${claim_file}")"
-
-    if test "${actual_claim_name}" != "${CLAIM_NAME}"; then
-        append_line "${ERRORS_FILE}" "${namespace}: claim inattendu (${actual_claim_name})"
-        continue
-    fi
-
-    if test -z "${claim_cpu}" || test -z "${claim_memory}"; then
-        append_line "${ERRORS_FILE}" "${namespace}: claim CPU/memory incomplet"
+    cpu_key="$(jq -r '.items[0].spec.hard | if has("requests.cpu") then "requests.cpu" else "cpu" end' "${quota_file}")"
+    memory_key="$(jq -r '.items[0].spec.hard | if has("requests.memory") then "requests.memory" else "memory" end' "${quota_file}")"
+    used_cpu="$(jq -r --arg key "${cpu_key}" '.items[0].status.used[$key] // empty' "${quota_file}")"
+    used_memory="$(jq -r --arg key "${memory_key}" '.items[0].status.used[$key] // empty' "${quota_file}")"
+    current_cpu="$(jq -r --arg key "${cpu_key}" '.items[0].spec.hard[$key] // empty' "${quota_file}")"
+    current_memory="$(jq -r --arg key "${memory_key}" '.items[0].spec.hard[$key] // empty' "${quota_file}")"
+    if test -z "${current_cpu}" || test -z "${current_memory}" || test -z "${used_cpu}" || test -z "${used_memory}"; then
+        append_line "${ERRORS_FILE}" "${namespace}: spec.hard ou status.used incomplet pour ${cpu_key}/${memory_key}"
         continue
     fi
 
@@ -131,16 +107,16 @@ while IFS= read -r namespace; do
         append_line "${ERRORS_FILE}" "${namespace}: CPU used non supporté (${used_cpu})"
         continue
     fi
-    if ! claim_cpu_m="$(cpu_to_m "${claim_cpu}")"; then
-        append_line "${ERRORS_FILE}" "${namespace}: CPU claim non supporté (${claim_cpu})"
+    if ! current_cpu_m="$(cpu_to_m "${current_cpu}")"; then
+        append_line "${ERRORS_FILE}" "${namespace}: CPU spec.hard non supporté (${current_cpu})"
         continue
     fi
     if ! used_memory_mi="$(memory_to_mi "${used_memory}")"; then
         append_line "${ERRORS_FILE}" "${namespace}: memory used non supportée (${used_memory})"
         continue
     fi
-    if ! claim_memory_mi="$(memory_to_mi "${claim_memory}")"; then
-        append_line "${ERRORS_FILE}" "${namespace}: memory claim non supportée (${claim_memory})"
+    if ! current_memory_mi="$(memory_to_mi "${current_memory}")"; then
+        append_line "${ERRORS_FILE}" "${namespace}: memory spec.hard non supportée (${current_memory})"
         continue
     fi
 
@@ -152,17 +128,17 @@ while IFS= read -r namespace; do
     proposed_cpu="${proposed_cpu_m}m"
     proposed_memory="${proposed_memory_mi}Mi"
 
-    target_cpu="${claim_cpu}"
-    target_memory="${claim_memory}"
+    target_cpu="${current_cpu}"
+    target_memory="${current_memory}"
     reduce_cpu=false
     reduce_memory=false
 
-    if test "${proposed_cpu_m}" -lt "${claim_cpu_m}"; then
+    if test "${proposed_cpu_m}" -lt "${current_cpu_m}"; then
         target_cpu="${proposed_cpu}"
         reduce_cpu=true
     fi
 
-    if test "${proposed_memory_mi}" -lt "${claim_memory_mi}"; then
+    if test "${proposed_memory_mi}" -lt "${current_memory_mi}"; then
         target_memory="${proposed_memory}"
         reduce_memory=true
     fi
@@ -173,15 +149,15 @@ while IFS= read -r namespace; do
     fi
 
     printf '  ResourceQuota: %s\n' "${quota_name}"
-    printf '  CPU    used=%s | +%s%%=%s | claim=%s | cible=%s | reduce=%s\n' \
-        "${used_cpu}" "${MARGIN_PERCENT}" "${proposed_cpu}" "${claim_cpu}" "${target_cpu}" "${reduce_cpu}"
-    printf '  Memory used=%s | +%s%%=%s | claim=%s | cible=%s | reduce=%s\n' \
-        "${used_memory}" "${MARGIN_PERCENT}" "${proposed_memory}" "${claim_memory}" "${target_memory}" "${reduce_memory}"
+    printf '  CPU    used=%s | +%s%%=%s | hard=%s | cible=%s | reduce=%s\n' \
+        "${used_cpu}" "${MARGIN_PERCENT}" "${proposed_cpu}" "${current_cpu}" "${target_cpu}" "${reduce_cpu}"
+    printf '  Memory used=%s | +%s%%=%s | hard=%s | cible=%s | reduce=%s\n' \
+        "${used_memory}" "${MARGIN_PERCENT}" "${proposed_memory}" "${current_memory}" "${target_memory}" "${reduce_memory}"
     printf '  Action: %s\n' "${action}"
 
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "${namespace}" "${actual_claim_name}" "${used_cpu}" "${claim_cpu}" "${target_cpu}" \
-        "${used_memory}" "${claim_memory}" "${target_memory}" \
+        "${namespace}" "${CLAIM_NAME}" "${used_cpu}" "${current_cpu}" "${target_cpu}" \
+        "${used_memory}" "${current_memory}" "${target_memory}" \
         "${reduce_cpu}" "${reduce_memory}" "${action}" |
         tee -a "${RESULTS_FILE}" | sed -n '0p'
 done
@@ -193,6 +169,15 @@ if test -s "${ERRORS_FILE}"; then
     exit 1
 fi
 
+# Generate the complete plan before any application.
+jq -Rn '
+    [inputs | split("\t") | select(.[10] == "APPLY") |
+      {apiVersion:"cagip.github.com/v1", kind:"ResourceQuotaClaim",
+       metadata:{name:.[1], namespace:.[0]},
+       spec:{cpu:.[4], memory:.[7]}}] |
+    {apiVersion:"v1", kind:"List", items:.}
+' "${RESULTS_FILE}" | tee "${WORK_DIR}/claims.json" | sed -n '0p'
+
 printf '\n%s\n' '================ RECAPITULATIF ========================'
 if test "${DRY_RUN}" = "true"; then
     awk -F '\t' 'BEGIN {
@@ -202,6 +187,8 @@ if test "${DRY_RUN}" = "true"; then
     $11 == "APPLY" {
         print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
     }' "${RESULTS_FILE}" | tee "${DRY_RUN_FILE}" | sed -n '0p'
+    cat "${WORK_DIR}/claims.json" | tee "${MANIFEST_FILE}" | sed -n '0p'
+    printf 'Manifests générés : %s\n' "${MANIFEST_FILE}"
     printf 'Rapport des changements applicables : %s\n' "${DRY_RUN_FILE}"
 fi
 
@@ -211,7 +198,7 @@ if ! test -s "${RESULTS_FILE}"; then
 fi
 
 printf '%-28s %-12s %-12s %-12s %-14s %-14s %-14s %-8s\n' \
-    NAMESPACE USED_CPU CLAIM_CPU TARGET_CPU USED_MEM CLAIM_MEM TARGET_MEM ACTION
+    NAMESPACE USED_CPU HARD_CPU TARGET_CPU USED_MEM HARD_MEM TARGET_MEM ACTION
 awk -F '\t' '{printf "%-28s %-12s %-12s %-12s %-14s %-14s %-14s %-8s\n",$1,$3,$4,$5,$6,$7,$8,$11}' "${RESULTS_FILE}"
 
 if test "${DRY_RUN}" = "true"; then
@@ -220,27 +207,10 @@ if test "${DRY_RUN}" = "true"; then
 fi
 
 printf '\n%s\n' '================ PHASE 2 : APPLICATION ================'
-cat "${RESULTS_FILE}" |
-while IFS="$(printf '\t')" read -r namespace claim_name used_cpu claim_cpu target_cpu used_memory claim_memory target_memory reduce_cpu reduce_memory action; do
-    if test "${action}" != "APPLY"; then
-        printf '[%s] SKIP\n' "${namespace}"
-        continue
-    fi
-
-    printf '[%s] APPLY %s cpu=%s memory=%s\n' "${namespace}" "${claim_name}" "${target_cpu}" "${target_memory}"
-
-    jq -n \
-        --arg name "${claim_name}" \
-        --arg namespace "${namespace}" \
-        --arg cpu "${target_cpu}" \
-        --arg memory "${target_memory}" \
-        '{
-          apiVersion:"cagip.github.com/v1",
-          kind:"ResourceQuotaClaim",
-          metadata:{name:$name,namespace:$namespace},
-          spec:{cpu:$cpu,memory:$memory}
-        }' |
-        kubectl apply -f -
-done
+if test "$(jq '.items | length' "${WORK_DIR}/claims.json")" -eq 0; then
+    printf 'Aucun changement applicable.\n'
+else
+    kubectl apply -f "${WORK_DIR}/claims.json"
+fi
 
 printf '\nTerminé.\n'
