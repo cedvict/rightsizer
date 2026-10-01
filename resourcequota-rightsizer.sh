@@ -5,6 +5,7 @@ NAMESPACE_FILE="${1:-namespaces.txt}"
 MARGIN_PERCENT="${MARGIN_PERCENT:-5}"
 CLAIM_NAME="${CLAIM_NAME:-managed-quota}"
 DRY_RUN="${DRY_RUN:-false}"
+DRY_RUN_FILE="${DRY_RUN_FILE:-rightsizer-changes.tsv}"
 
 WORK_DIR="$(mktemp -d)"
 RESULTS_FILE="${WORK_DIR}/evaluated.tsv"
@@ -191,6 +192,17 @@ if test -s "${ERRORS_FILE}"; then
 fi
 
 printf '\n%s\n' '================ RECAPITULATIF ========================'
+if test "${DRY_RUN}" = "true"; then
+    awk -F '\t' 'BEGIN {
+        OFS = "\t"
+        print "NAMESPACE", "CLAIM", "USED_CPU", "CURRENT_CPU", "TARGET_CPU", "USED_MEMORY", "CURRENT_MEMORY", "TARGET_MEMORY", "REDUCE_CPU", "REDUCE_MEMORY"
+    }
+    $11 == "APPLY" {
+        print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    }' "${RESULTS_FILE}" | tee "${DRY_RUN_FILE}" | sed -n '0p'
+    printf 'Rapport des changements applicables : %s\n' "${DRY_RUN_FILE}"
+fi
+
 if ! test -s "${RESULTS_FILE}"; then
     printf '%s\n' 'Aucun ResourceQuota éligible.'
     exit 0

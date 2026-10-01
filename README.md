@@ -32,6 +32,17 @@ Simulation recommandée :
 
     DRY_RUN=true ./resourcequota-rightsizer.sh namespaces.txt
 
+Le dry run produit `rightsizer-changes.tsv` dans le répertoire courant.
+Ce fichier TSV contient uniquement les claims réductibles : namespace, nom du
+claim, consommation, valeurs actuelles, valeurs cibles et indicateurs de réduction
+CPU/mémoire. Il peut être ouvert dans un tableur. Sans changement applicable, il
+contient seulement l'en-tête. Une erreur d'évaluation empêche sa génération.
+Un rapport existant au même chemin est remplacé après une évaluation réussie.
+
+Choisir le chemin du rapport :
+
+    DRY_RUN=true DRY_RUN_FILE=/tmp/changements.tsv ./resourcequota-rightsizer.sh namespaces.txt
+
 Application :
 
     ./resourcequota-rightsizer.sh namespaces.txt
