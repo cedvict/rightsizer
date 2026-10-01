@@ -20,7 +20,7 @@ DRY_RUN=true ./resourcequota-rightsizer.sh namespaces.txt
 ces trois fichiers dans le répertoire courant et affiche leurs chemins absolus :
 
 - `rightsizer-changes.tsv` : changements applicables des namespaces évalués,
-  avec consommation, plafonds actuels et cibles CPU/mémoire ;
+  avec consommation, plafonds actuels, cibles CPU/mémoire et gains prévus ;
 - `rightsizer-claims.json` : liste JSON des ResourceQuotaClaim générés ;
 - `rightsizer-errors.log` : erreurs par namespace, notamment les refus d'accès.
   Vide si toute l'évaluation a réussi.
@@ -48,6 +48,25 @@ MANIFEST_FILE=./rapports/claims.json \
 ERROR_REPORT_FILE=./rapports/erreurs.log \
 ./resourcequota-rightsizer.sh namespaces.txt
 ```
+
+## Gains de quota
+
+Le TSV contient, pour chaque changement, `GAIN_CPU_M` (millicores),
+`GAIN_MEMORY_MI` (Mi), `GAIN_CPU_PERCENT` et `GAIN_MEMORY_PERCENT`.
+Chaque gain vaut le plafond ResourceQuota actuel moins la cible retenue.
+Une dimension inchangée a un gain nul.
+
+Le script affiche aussi le total CPU (millicores et cores), le total mémoire
+(Mi et Gi) et les pourcentages rapportés à la somme des plafonds de tous les
+namespaces évalués, y compris ceux sans réduction. Les namespaces sans quota
+ou en erreur sont exclus des totaux. Une évaluation partielle est signalée.
+
+Exemple : passer de `2` CPU à `1050m` et de `2Gi` à `1076Mi` libère
+`950m` CPU (47,50 %) et `972Mi` mémoire (47,46 %).
+
+Ces gains sont des **réductions de quota prévues**, pas des mesures d'économie
+réelle de CPU ou RAM. En dry run, aucune ressource n'est modifiée. Après
+application, le résultat effectif dépend de la réconciliation par le contrôleur.
 
 ## Application
 

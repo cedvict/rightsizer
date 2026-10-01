@@ -1,3 +1,4 @@
+import csv
 import json
 import os
 from pathlib import Path
@@ -174,6 +175,53 @@ else:
         result = self.run_script('false', MANIFEST_FILE='directory')
         self.assertEqual(result.returncode, 1)
         self.assertFalse((self.root / 'applied.json').exists())
+
+    def gain_rows(self):
+        with (self.output / 'rightsizer-changes.tsv').open() as report:
+            return list(csv.DictReader(report, delimiter='\t'))
+
+    def test_gain_values_and_totals(self):
+        self.namespaces.write_text('example\nsecond\n')
+        result = self.run_script()
+        self.assert_reports(result, count=2)
+        row = self.gain_rows()[0]
+        self.assertEqual(float(row['GAIN_CPU_M']), 950)
+        self.assertEqual(float(row['GAIN_MEMORY_MI']), 972)
+        self.assertEqual(row['GAIN_CPU_PERCENT'], '47.50')
+        self.assertEqual(row['GAIN_MEMORY_PERCENT'], '47.46')
+        self.assertIn('CPU : 1900 m (1.9 cores), 47.50%', result.stdout)
+        self.assertIn('Mémoire : 1944 Mi (1.8984375 Gi), 47.46%', result.stdout)
+
+    def test_gain_is_zero_for_unchanged_dimension(self):
+        self.quota['items'][0]['status']['used']['memory'] = '2Gi'
+        self.assert_reports(self.run_script())
+        row = self.gain_rows()[0]
+        self.assertEqual(row['GAIN_MEMORY_MI'], '0')
+        self.assertEqual(row['GAIN_MEMORY_PERCENT'], '0.00')
+        self.assertEqual(row['GAIN_CPU_M'], '950')
+
+    def test_zero_baseline_produces_finite_zero_totals(self):
+        self.quota['items'][0]['spec']['hard'] = {'cpu': '0', 'memory': '0'}
+        self.quota['items'][0]['status']['used'] = {'cpu': '0', 'memory': '0'}
+        result = self.run_script()
+        self.assert_reports(result, count=0)
+        self.assertIn('CPU : 0 m (0 cores), 0.00%', result.stdout)
+        self.assertIn('Mémoire : 0 Mi (0 Gi), 0.00%', result.stdout)
+
+    def test_partial_totals_include_only_evaluated_namespaces(self):
+        self.namespaces.write_text('example\ndenied\nempty\n')
+        result = self.run_script()
+        self.assert_reports(result, code=2)
+        self.assertIn('sur 1 namespace(s) évalué(s), 1 réduction(s)', result.stdout)
+        self.assertIn('CPU : 950 m (0.95 cores), 47.50%', result.stdout)
+
+    def test_fractional_memory_gain_uses_original_bytes(self):
+        self.quota['items'][0]['spec']['hard']['memory'] = '2.5Mi'
+        self.quota['items'][0]['status']['used']['memory'] = '1Mi'
+        self.assert_reports(self.run_script())
+        row = self.gain_rows()[0]
+        self.assertEqual(float(row['GAIN_MEMORY_MI']), 0.5)
+        self.assertEqual(row['GAIN_MEMORY_PERCENT'], '20.00')
 
 
 if __name__ == '__main__':

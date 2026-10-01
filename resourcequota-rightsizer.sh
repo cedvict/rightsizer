@@ -204,6 +204,18 @@ while IFS= read -r namespace || test -n "${namespace}"; do
         action="APPLY"
     fi
 
+    gains="$(awk -v cpu="${current_cpu_m}" -v mem="${current_memory_bytes}" \
+        -v target_cpu="${proposed_cpu_m}" -v target_mem="${proposed_memory_bytes}" \
+        -v reduce_cpu="${reduce_cpu}" -v reduce_mem="${reduce_memory}" 'BEGIN {
+        gc = reduce_cpu == "true" ? cpu - target_cpu : 0
+        gm = reduce_mem == "true" ? mem - target_mem : 0
+        printf "%.12g\t%.15g\t%.2f\t%.2f", gc, gm,
+            (cpu > 0 ? 100 * gc / cpu : 0), (mem > 0 ? 100 * gm / mem : 0)
+    }')"
+    printf '%s\n' "${gains}" | awk -F '\t' '{
+        printf "  Gain de quota prévu : CPU %.12g m (%s%%), mémoire %.12g Mi (%s%%)\n", $1, $3, $2 / 1048576, $4
+    }'
+
     printf '  ResourceQuota: %s\n' "${quota_name}"
     printf '  CPU    used=%s | +%s%%=%s | hard=%s | cible=%s | reduce=%s\n' \
         "${used_cpu}" "${MARGIN_PERCENT}" "${proposed_cpu}" "${current_cpu}" "${target_cpu}" "${reduce_cpu}"
@@ -211,10 +223,10 @@ while IFS= read -r namespace || test -n "${namespace}"; do
         "${used_memory}" "${MARGIN_PERCENT}" "${proposed_memory}" "${current_memory}" "${target_memory}" "${reduce_memory}"
     printf '  Action: %s\n' "${action}"
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "${namespace}" "${CLAIM_NAME}" "${used_cpu}" "${current_cpu}" "${target_cpu}" \
         "${used_memory}" "${current_memory}" "${target_memory}" \
-        "${reduce_cpu}" "${reduce_memory}" "${action}" |
+        "${reduce_cpu}" "${reduce_memory}" "${action}" "${gains}" "${current_cpu_m}" "${current_memory_bytes}" |
         tee -a "${RESULTS_FILE}" | sed -n ''
 done
 
@@ -230,16 +242,25 @@ jq -Rn '
 printf '\n%s\n' '================ RECAPITULATIF ========================'
 awk -F '\t' 'BEGIN {
     OFS = "\t"
-    print "NAMESPACE", "CLAIM", "USED_CPU", "CURRENT_CPU", "TARGET_CPU", "USED_MEMORY", "CURRENT_MEMORY", "TARGET_MEMORY", "REDUCE_CPU", "REDUCE_MEMORY"
+    print "NAMESPACE", "CLAIM", "USED_CPU", "CURRENT_CPU", "TARGET_CPU", "USED_MEMORY", "CURRENT_MEMORY", "TARGET_MEMORY", "REDUCE_CPU", "REDUCE_MEMORY", "GAIN_CPU_M", "GAIN_MEMORY_MI", "GAIN_CPU_PERCENT", "GAIN_MEMORY_PERCENT"
 }
 $11 == "APPLY" {
-    print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $12, sprintf("%.12g", $13 / 1048576), $14, $15
 }' "${RESULTS_FILE}" | tee "${DRY_RUN_FILE}" | sed -n ''
 cat "${WORK_DIR}/claims.json" | tee "${MANIFEST_FILE}" | sed -n ''
 cat "${ERRORS_FILE}" | tee "${ERROR_REPORT_FILE}" | sed -n ''
 printf 'Manifests générés : %s\n' "${MANIFEST_FILE}"
 printf 'Rapport des changements applicables : %s\n' "${DRY_RUN_FILE}"
 printf 'Rapport des erreurs : %s\n' "${ERROR_REPORT_FILE}"
+
+awk -F '\t' '
+    {cpu += $16; mem += $17; gc += $12; gm += $13; evaluated++; if ($11 == "APPLY") changed++}
+    END {
+        printf "\nGain de quota prévu sur %d namespace(s) évalué(s), %d réduction(s) :\n", evaluated, changed
+        printf "  CPU : %.12g m (%.12g cores), %.2f%% des plafonds évalués\n", gc, gc / 1000, (cpu > 0 ? 100 * gc / cpu : 0)
+        printf "  Mémoire : %.12g Mi (%.12g Gi), %.2f%% des plafonds évalués\n", gm / 1048576, gm / 1073741824, (mem > 0 ? 100 * gm / mem : 0)
+    }
+' "${RESULTS_FILE}"
 
 if test -s "${ERRORS_FILE}"; then
     printf '\nATTENTION : évaluation partielle. Les manifests couvrent uniquement les namespaces évalués.\n'
