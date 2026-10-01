@@ -6,10 +6,14 @@ jamais d'augmentation automatique.
 
 CPU et mémoire sont évalués indépendamment.
 
+Les valeurs utilisées proviennent du `status.used` du ResourceQuota :
+`requests.cpu` et `requests.memory`, ou à défaut `cpu` et `memory`.
+Une valeur absente bloque l'évaluation ; elle n'est pas assimilée à zéro.
+
 Formats CPU supportés : `10`, `1`, `0.5`, `1000m`, `500m`.
 Le CPU est normalisé en millicores avant comparaison.
 
-Formats mémoire supportés : `Ki`, `Mi`, `Gi`, `Ti`.
+Formats mémoire supportés : `Ki`, `Mi`, `Gi`, `Ti`, ainsi que `0` sans unité.
 La mémoire est normalisée en Mi avant comparaison (`1Gi = 1024Mi`).
 
 Le script :

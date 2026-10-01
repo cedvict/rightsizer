@@ -33,6 +33,7 @@ cpu_to_m() {
 memory_to_mi() {
     local value="$1"
     case "${value}" in
+        0) printf '0\n' ;;
         *Ki) awk -v v="${value%Ki}" 'BEGIN { printf "%.0f\n", v / 1024 }' ;;
         *Mi) printf '%s\n' "${value%Mi}" ;;
         *Gi) awk -v v="${value%Gi}" 'BEGIN { printf "%.0f\n", v * 1024 }' ;;
@@ -91,11 +92,12 @@ while IFS= read -r namespace; do
     fi
 
     quota_name="$(jq -r '.items[0].metadata.name // empty' "${quota_file}")"
-    used_cpu="$(jq -r '.items[0].status.used["requests.cpu"] // empty' "${quota_file}")"
-    used_memory="$(jq -r '.items[0].status.used["requests.memory"] // empty' "${quota_file}")"
+    used_cpu="$(jq -r '.items[0].status.used | .["requests.cpu"] // .cpu // empty' "${quota_file}")"
+    used_memory="$(jq -r '.items[0].status.used | .["requests.memory"] // .memory // empty' "${quota_file}")"
 
     if test -z "${used_cpu}" || test -z "${used_memory}"; then
-        append_line "${ERRORS_FILE}" "${namespace}: status.used CPU/memory incomplet"
+        used_keys="$(jq -r '(.items[0].status.used // {}) | keys | join(", ")' "${quota_file}")"
+        append_line "${ERRORS_FILE}" "${namespace}: status.used CPU/memory incomplet (attendu: requests.cpu ou cpu, requests.memory ou memory; clés présentes: ${used_keys})"
         continue
     fi
 
